@@ -13,11 +13,30 @@ function trackedFeatureInfo = coordAmpMatFromIndicesSparse(trackedFeatureIndx,..
 %"linkFeaturesKalmanSparse".
 %
 %Khuloud Jaqaman, June 2010
+%
+% Copyright (C) 2018, Danuser Lab - UTSouthwestern 
+%
+% This file is part of u-track.
+% 
+% u-track is free software: you can redistribute it and/or modify
+% it under the terms of the GNU General Public License as published by
+% the Free Software Foundation, either version 3 of the License, or
+% (at your option) any later version.
+% 
+% u-track is distributed in the hope that it will be useful,
+% but WITHOUT ANY WARRANTY; without even the implied warranty of
+% MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+% GNU General Public License for more details.
+% 
+% You should have received a copy of the GNU General Public License
+% along with u-track.  If not, see <http://www.gnu.org/licenses/>.
+% 
+% 
 
 %% Conversion
 
 %reserve space for matrix
-trackedFeatureInfo = sparse(zeros(size(trackedFeatureIndx,1),8*numFrames));
+trackedFeatureInfo = sparse(size(trackedFeatureIndx,1),8*numFrames);
 % trackedFeatureInfo = NaN(size(trackedFeatureIndx,1),8*numFrames);
 
 %for now, the matrix always has space for z, hence I have to treat 2D and

@@ -1,16 +1,16 @@
-function rad_detection = rad2utrack(rad_objs, meta, file_info)
+function rad_detection = rad2utrack(rad_objs, meta)
     % column key
     X = 1;
     Y = 2;
     AMP = 3;
-    PARTICLE_ID = 4;
+%     PARTICLE_ID = 4;
     FRAME = 5;
-    TRACK_ID = 6;
-    SIGMA = 7;
+%     TRACK_ID = 6;
+%     SIGMA = 7;
     
     interval_sec = meta.getImageIntervalMs() ./ 1000;
     
-    is_cell = false;
+%     is_cell = false;
     if iscell(rad_objs)
         is_cell = true;
     elseif ismatrix(rad_objs)
@@ -19,7 +19,7 @@ function rad_detection = rad2utrack(rad_objs, meta, file_info)
         error('rad_objs is incorrect type.')
     end
     
-    n_frames = 0;
+%     n_frames = 0;
     if is_cell
         n_frames = size(rad_objs,1);
     else

@@ -1,0 +1,322 @@
+---
+title: "R Notebook"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+#library(mclust)
+library(Hmisc)
+library(tidyverse)
+library(lubridate)
+library(ggforce)
+library(cowplot)
+theme_set(theme_cowplot())
+library(tidybayes)
+
+```
+
+```{r}
+find_all_files <- function(dir) {
+  all_handles <- list.files(path = dir, full.names = T)
+  if (length(all_handles) == 0) {
+    stop("No files found. Check that the path is correct and the drive is mounted.")
+  }
+  
+  all_folders <- ifelse(!file_test("-f", all_handles) & file_test("-d", all_handles), all_handles, NA) %>%
+    discard(~is.na(.x))
+  
+  all_data_files <- map(all_folders, ~list.files(path = .x, pattern = "\\.*\\.table\\.txt", full.names = T)) %>% 
+    unlist()
+  return(all_data_files)
+}
+
+# Returns the filename, not the whole path.
+get_names <- function(strings) {
+  str_extract(strings, pattern = "(?<=\\d{4}-\\d{2}-\\d{2}\\/).*$")
+}
+ 
+filter_names  <- function(strings, patterns, discard = F) {
+  if (discard) {
+    discard(strings, ~ str_detect(string = .x, pattern = patterns) %>% reduce(`&`))
+  } else {
+    keep(strings, ~ str_detect(string = .x, pattern = patterns) %>% reduce(`&`))
+  }
+}
+
+get_dates <- function(strings) {
+  str_extract(strings, "(?<=\\/)\\d{4}-\\d{2}-\\d{2}(?=\\/)") %>%
+    ymd()
+}
+
+filter_dates_range <- function(strings, cutoff, before = F) {
+  cutoff_date <- ymd(cutoff)
+  keep(strings, ~ifelse(before, get_date(.x) <= cutoff_date, get_dates(.x) >= cutoff_date))
+}
+
+filter_dates <- function(strings, date_list, discard = F) {
+  date_list <- ymd(date_list)
+  keep(strings, ~ifelse(discard, !(get_dates(.x) %in% date_list), get_dates(.x) %in% date_list))
+}
+
+print_dates <- function(strings) {
+  get_dates(strings) %>%
+    unique() %>% 
+    print()
+}
+
+print_names <- function(strings) {
+  get_names(strings) %>%
+    print()
+}
+
+load_and_label_files <- function(strings, label) {
+  map_df(strings, ~read_csv(.x, col_types = cols())) %>%
+    mutate(label = label)
+}
+
+discard_nonmoving <- function(df, cutoff = 10) {
+  filter(df, diffcoeff_cve_mean > cutoff)
+}
+
+gen_standard_plots <- function(df, dc_cutoff = 10,
+                               log_dc_lb = -3, log_dc_ub = 4,
+                               speed_ub = 200, swim_col = "firebrick",
+                               nonswim_col = "royalblue") {
+  #browser()
+    if (!("cluster" %in% colnames(df))) {
+      #color_scheme <- scale_color_brewer(palette = "Set1")
+      color_scheme <- scale_color_manual(values=list(`1` = nonswim_col, `0` = swim_col))
+      df$cluster = as.factor(as.numeric(df$diffcoeff_cve_mean < dc_cutoff))
+      color_guide = FALSE
+      legend = "none"
+    } else {
+      color_scheme <- scale_color_brewer(palette = "Set1")
+      color_guide = TRUE
+      legend = "right"
+    }
+  
+  df <- df %>%
+    select(diffcoeff_cve_mean, label, trajtime, meanspeed, tumblebias, diffcoeff_cve_runtime, cluster, varspeed) %>%
+    filter(diffcoeff_cve_mean > 0) %>% 
+    group_by(label) %>% 
+    mutate(log_diffcoeff_cve_mean = log10(diffcoeff_cve_mean), log_diffcoeff_cve_runtime = log10(diffcoeff_cve_runtime), varspeed = sqrt(varspeed)/meanspeed) %>%
+    filter(log_diffcoeff_cve_mean > log_dc_lb, log_diffcoeff_cve_mean < log_dc_ub) %>%
+    filter(meanspeed < speed_ub) %>%
+    drop_na() %>%
+    mutate(w = trajtime/sum(trajtime))
+  
+  df_wt_summary <- df %>%
+    summarize(motile_wt_pct = sum((diffcoeff_cve_mean > dc_cutoff) * w),
+              dc_wt_mean = weighted.mean(log_diffcoeff_cve_mean, w))
+  
+  dc_plt <- df %>%
+    ggplot(aes(x = label, y = log_diffcoeff_cve_mean, weights = w, group = label)) +
+    geom_sina(aes(alpha = w, color = cluster), stroke = 0, scale = 'area') +
+    geom_hline(yintercept = log10(dc_cutoff), linetype = 2) +
+    scale_y_continuous(labels = scales::math_format(), breaks = -3:4) +
+    labs(x = "", y =expression(paste("Diffusion coefficient (", mu, "m"^"2", "/s)"))) + 
+    theme(legend.position = legend) +
+    annotate("text", x = length(unique(df$label)) + 0.40, y = log10(dc_cutoff)*1.2, label = "motile", col = swim_col) +
+    annotate("text", x = length(unique(df$label)) + 0.40, y = log10(dc_cutoff)*0.8, label = "non", col = nonswim_col) +
+    annotate("text", x = length(unique(df$label)) + 0.40, y = log10(dc_cutoff)*0.55, label = "motile", col = nonswim_col) +
+    annotate("point", x = df_wt_summary$label, y = df_wt_summary$dc_wt_mean, col = "black", size = 2) + 
+    guides(alpha = FALSE) +
+    color_scheme
+  
+  for (i in 1:length(unique(df$label))) {
+    motile_pct = (df_wt_summary[i,2]*100) %>% as.numeric() %>% round(digits = 0)
+    nonmotile_pct = ((1-df_wt_summary[i,2])*100) %>% as.numeric() %>% round(digits = 0)
+    
+    dc_plt <- dc_plt + 
+      annotate("text", x = i, y = log_dc_lb*1.05, label = paste(nonmotile_pct, "%", sep = ""), col = nonswim_col) +
+      annotate("text", x = i, y = log_dc_ub*1.05, label = paste(motile_pct, "%", sep = ""), col = swim_col)
+  }
+  
+  df <- df %>% 
+    discard_nonmoving(cutoff = dc_cutoff) %>%
+    mutate(w = trajtime/sum(trajtime))
+  
+  df_wt_summary <- df %>%
+    summarize(speed_wt_mean = weighted.mean(meanspeed, w),
+              tb_wt_mean = weighted.mean(tumblebias, w),
+              dir_persist_wt_mean = weighted.mean(log10(diffcoeff_cve_runtime), w),
+              wt_trajtime_mean = weighted.mean(log10(trajtime), w),
+              wt_varspeed_mean = weighted.mean(varspeed, w))
+  
+  speed_plt <- df %>%
+    ggplot(aes(x = label, y = meanspeed, weigths = w, group = label)) +
+    geom_sina(aes(alpha = w, color = cluster), stroke = 0, scale = 'area') +
+    labs(x = "", y = expression(paste("Mean speed (", mu, "m/s)"))) +
+    theme(legend.position = "none") +
+    annotate("point", x = df_wt_summary$label, y = df_wt_summary$speed_wt_mean, col = "black", size = 2) +
+    color_scheme
+  
+  tb_plt <- df %>%
+    ggplot(aes(x = label, y = tumblebias, weigths = w, group = label)) + scale_size(range = c(0, 1)) +
+    scale_y_continuous(limits = c(0,1)) +
+    geom_sina(mapping = aes(alpha = w, color = cluster), stroke = 0, scale = 'area') + 
+    labs(x = "", y = "Tumble bias") +
+    theme(legend.position = "none") +
+    annotate("point", x = df_wt_summary$label, y = df_wt_summary$tb_wt_mean, col = "black", size = 2) +
+    color_scheme
+  
+  dir_persist_plt <-  df %>%
+    ggplot(aes(x = label, y = log_diffcoeff_cve_runtime, weigths = w, group = label)) + scale_size(range = c(0, 1)) + 
+    geom_sina(mapping = aes(alpha = w, color = cluster), stroke = 0, scale = 'area') +
+    labs(x = "", y = "Dir. persistence (s)") +
+    scale_y_continuous(labels = scales::math_format()) +
+    theme(legend.position = "none") +
+    annotate("point", x = df_wt_summary$label, y = df_wt_summary$dir_persist_wt_mean, col = "black", size = 2) +
+    color_scheme
+  
+   trajtime_plt <-  df %>%
+    ggplot(aes(x = label, y = trajtime, weigths = w, group = label)) + scale_size(range = c(0, 1)) + 
+    geom_sina(mapping = aes(alpha = w, color = cluster), stroke = 0, scale = 'area') +
+    labs(x = "", y = "Trajectory time (s)") +
+    theme(legend.position = "none") +
+    annotate("point", x = df_wt_summary$label, y = df_wt_summary$wt_trajtime_mean, col = "black", size = 2) +
+    color_scheme
+    
+    varspeed_plt <-  df %>%
+    ggplot(aes(x = label, y = varspeed, weigths = w, group = label)) + scale_size(range = c(0, 1)) + 
+    geom_sina(mapping = aes(alpha = w, color = cluster), stroke = 0, scale = 'area') +
+    labs(x = "", y = "Std. speed") +
+    theme(legend.position = "none") +
+    annotate("point", x = df_wt_summary$label, y = df_wt_summary$wt_varspeed_mean, col = "black", size = 2) +
+    color_scheme
+      
+  return(plot_grid(dc_plt, speed_plt, tb_plt, dir_persist_plt, trajtime_plt, varspeed_plt, nrow = 2, ncol = 3))
+}
+
+write_summary_files <- function(df, filepath, log_dc_lb = -3, log_dc_ub = 4,
+                                speed_ub = 200, sigfigs = 3) {
+  df <- df %>%
+    select(diffcoeff_cve_mean, label, trajtime, meanspeed, tumblebias, diffcoeff_cve_runtime, varspeed, metadata) %>%
+    filter(diffcoeff_cve_mean > 0) %>% 
+    group_by(label) %>% 
+    mutate(log_diffcoeff_cve_mean = log10(diffcoeff_cve_mean),
+           log_diffcoeff_cve_runtime = log10(diffcoeff_cve_runtime),
+           varspeed = sqrt(varspeed)/meanspeed) %>%
+    filter(log_diffcoeff_cve_mean > log_dc_lb, log_diffcoeff_cve_mean < log_dc_ub) %>%
+    filter(meanspeed < speed_ub) %>%
+    drop_na() %>%
+    mutate(w = trajtime/sum(trajtime))
+  
+  #Hmisc recommends normwt = T for "reliability" weighting. normwt = F produces weird results.
+  df %>%
+    summarize(nb_movies = length(unique(metadata)),
+              nb_trajectories = length(metadata),
+              total_time_min = (sum(trajtime)/60) %>% round(digits = 0),
+              mean_diff = weighted.mean(log_diffcoeff_cve_mean, w) %>% signif(digits = sigfigs),
+              median_diff = wtd.quantile(x = log_diffcoeff_cve_mean, weights = w, probs = 0.5, normwt = T) %>% signif(digits = sigfigs),
+              mean_speed = weighted.mean(meanspeed, w) %>% signif(digits = sigfigs),
+              median_speed = wtd.quantile(x = meanspeed, weights = w, probs = 0.5, normwt = T) %>% signif(digits = sigfigs),
+              mean_runtime = weighted.mean(diffcoeff_cve_runtime, w) %>% signif(digits = sigfigs),
+              median_runtime = wtd.quantile(x = diffcoeff_cve_runtime, weights = w, probs = 0.5, normwt = T) %>% signif(digits = sigfigs)
+              ) %>%
+    write_csv(path = filepath)
+}
+
+```
+
+```{r}
+files <- find_all_files("/run/user/1000/gvfs/smb-share:server=ufs.hpcc.msu.edu,share=rs-017/dufourlab/NhuNguyen/Microscope")
+#files = find_all_files(".")
+
+experiments_data <- files %>%
+  filter_dates(c("2018-09-21", "2019-01-25", "2019-02-01", "2019-02-02", "2019-02-05", "2019-02-20"))
+
+vc24_pH6_data <- experiments_data %>%
+  filter_names(c("vibrio24_", "pH6")) %>%
+  load_and_label_files("El Tor pH6")
+
+vc24_pH7_data <- experiments_data %>%
+  filter_names(c("vibrio24_", "pH7")) %>%
+  load_and_label_files("El Tor pH7")
+
+vc24_pH8_data <- experiments_data %>%
+  filter_names(c("vibrio24_", "pH8")) %>%
+  load_and_label_files("El Tor pH8")
+
+vc_data <- bind_rows(vc24_pH6_data, vc24_pH7_data, vc24_pH8_data) %>%
+  drop_na(diffcoeff_cve_mean, tumblebias) %>%
+  filter(varspeed > 10^-10, meanspeed > 0)
+```
+
+```{r}
+files <- find_all_files("/run/user/1000/gvfs/smb-share:server=ufs.hpcc.msu.edu,share=rs-017/dufourlab/JoshuaFranklin/Microscope")
+
+experimental_data <- files %>%
+  filter_dates(c("2017-07-11", "2017-09-17", "2017-09-21", "2017-10-19", "2017-11-17", "2017-11-28", "2017-11-30", "2017-12-01"))
+
+se_9677_all <- experimental_data %>%
+  filter_names(c("(TH)?9677"))
+
+se_9677_0p05mc <- se_9677_all %>%
+  filter_names("0p05MC") %>%
+  load_and_label_files("0.05% MC")
+
+se_9677_0p3mc <- se_9677_all %>%
+  filter_names("0p3MC") %>%
+  load_and_label_files("0.3% MC")
+
+se_9677_1p0mc <- se_9677_all %>%
+  filter_names("1p0MC") %>%
+  load_and_label_files("1.0% MC")
+
+se_data <- bind_rows(se_9677_0p05mc, se_9677_0p3mc, se_9677_1p0mc) %>%
+  drop_na(diffcoeff_cve_mean, tumblebias) %>%
+  filter(varspeed > 10^-10, meanspeed > 0)
+
+gen_standard_plots(se_data) %>%
+  ggsave(filename = "se_test.png", device = 'png', width = 10, height = 6)
+
+write_summary_files(se_data, filepath = "se_data_dump.csv")
+```
+
+tnse tests
+```{r}
+se_data_subset <- se_data %>%
+  sample_n(size = 10000) %>%
+  filter(label == "0.05% MC") %>%
+  drop_na()
+
+colors = rainbow(length(unique(se_data_subset$metadata)))
+names(colors) = unique(se_data_subset$metadata)
+ecb = function(x,y){ plot(x,t='n'); points(x, col=colors[se_data_subset$metadata])}
+tsne_se = se_data_subset %>%
+  select(-trajtime, -metadata, -label) %>%
+  tsne(epoch_callback = ecb, perplexity=25, max_iter = 3000)
+
+```
+
+
+
+
+```{r}
+# cluster data to filter bad tracks
+vc_data_sub <- vc_data %>%
+  select(trajtime, meanspeed, varspeed, diffcoeff_cve_mean, diffcoeff_cve_runtime) %>%
+  mutate(trajtime = log(trajtime), varspeed = sqrt(varspeed)/meanspeed, diffcoeff_cve_mean = log(diffcoeff_cve_mean), diffcoeff_cve_runtime = log(diffcoeff_cve_runtime)) %>%
+  select(-meanspeed) %>%
+  scale()
+
+# Add pctile, std err, bigger dots. 
+
+clust <- Mclust(vc_data_sub, G = 5)
+
+vc_data <- vc_data %>%
+  mutate(cluster = as.factor(clust$classification))
+
+gen_standard_plots(vc_data)
+
+bad_clusters <- c(5,7,10)
+
+vc_data <- vc_data %>%
+  filter(!(vc_data$cluster %in% bad_clusters)) %>%
+  select(-cluster)
+
+gen_standard_plots(vc_data)
+```

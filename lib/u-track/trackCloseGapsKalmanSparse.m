@@ -1,6 +1,6 @@
 function [tracksFinal,kalmanInfoLink,errFlag] = trackCloseGapsKalmanSparse(...
     movieInfo,costMatrices,gapCloseParam,kalmanFunctions,probDim,...
-    saveResults,verbose)
+    saveResults,verbose,varargin)
 %TRACKCLOSEGAPSKALMANSPARSE (1) links features between frames, possibly using the Kalman Filter for motion propagation and (2) closes gaps, with merging and splitting
 %
 %SYNOPSIS [tracksFinal,kalmanInfoLink,errFlag] = trackCloseGapsKalmanSparse(...
@@ -113,6 +113,25 @@ function [tracksFinal,kalmanInfoLink,errFlag] = trackCloseGapsKalmanSparse(...
 %       errFlag       : 0 if function executes normally, 1 otherwise.
 %
 %Khuloud Jaqaman, April 2007
+%
+% Copyright (C) 2018, Danuser Lab - UTSouthwestern 
+%
+% This file is part of u-track.
+% 
+% u-track is free software: you can redistribute it and/or modify
+% it under the terms of the GNU General Public License as published by
+% the Free Software Foundation, either version 3 of the License, or
+% (at your option) any later version.
+% 
+% u-track is distributed in the hope that it will be useful,
+% but WITHOUT ANY WARRANTY; without even the implied warranty of
+% MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+% GNU General Public License for more details.
+% 
+% You should have received a copy of the GNU General Public License
+% along with u-track.  If not, see <http://www.gnu.org/licenses/>.
+% 
+% 
 
 %% Output
 
@@ -311,15 +330,20 @@ if numFramesEff == 0
 end
 
 %% Link between frames
-
-%if self-adaptive, link in multiple rounds
+% For skipping frames:
+repFrame=1;
+if repFrame>1
+    movieInfo=movieInfo(1:repFrame:end);
+    numFramesEff = length(movieInfo);
+end
+% if self-adaptive, link in multiple rounds
 if selfAdaptive
 
     %get initial track segments by linking features between consecutive frames
     if verbose
         disp('Linking features forwards ...');
     end
-    [dummy,dummy,kalmanInfoLink,dummy,linkingCosts] = linkFeaturesKalmanSparse(...
+    [tmp,dummy,kalmanInfoLink,dummy,linkingCosts] = linkFeaturesKalmanSparse(...
         movieInfo,costMatrices(1).funcName,costMatrices(1).parameters,...
         kalmanFunctions,probDim,[],[],verbose);
     clear dummy
@@ -363,7 +387,7 @@ else %if not self-adaptive, link in one round only
         disp('Linking features ...');
     end
     [tracksFeatIndxLink,tracksCoordAmpLink,dummy,nnDistLinkedFeat,...
-        dummy,errFlag] = linkFeaturesKalman(movieInfo,costMatrices(1).funcName,...
+        dummy,errFlag] = linkFeaturesKalmanSparse(movieInfo,costMatrices(1).funcName,...
         costMatrices(1).parameters,kalmanFunctions,probDim,[],[],verbose);
     kalmanInfoLink = [];
     clear dummy
@@ -381,7 +405,7 @@ if isequal(costMatrices(2).funcName,'plusTipCostMatCloseGaps')
     tracksCoordAmpLink(:,3:8:end) = 0;
     tracksCoordAmpLink(:,7:8:end) = 0;
     [tracksCoordAmpLink,tracksFeatIndxLink,nnDistLinkedFeat]=...
-       breakNonlinearTracks(tracksCoordAmpLink,tracksFeatIndxLink,nnDistLinkedFeat);
+       plusTipBreakNonlinearTracks(tracksCoordAmpLink,tracksFeatIndxLink,nnDistLinkedFeat);
 end
 
 
@@ -445,7 +469,7 @@ numTracksLink = size(tracksFeatIndxLink,1);
 
 %if there are gaps to close (i.e. if there are tracks that start after the
 %first frame and tracks that end before the last frame) ...
-if any(trackStartTime > 1) && any(trackEndTime < numFramesEff)
+if any(trackStartTime > 1) || any(trackEndTime < numFramesEff)
 
     if verbose
         disp(sprintf('Closing gaps (%d starts and %d ends) ...',...
@@ -464,7 +488,7 @@ if any(trackStartTime > 1) && any(trackEndTime < numFramesEff)
         'errFlag] = ' costMatrices(2).funcName '(tracksCoordAmpLink,'...
         'tracksFeatIndxLink,trackStartTime,trackEndTime,costMatrices(2).parameters,'...
         'gapCloseParam,kalmanInfoLink,nnDistLinkedFeat,probDim,movieInfo);'])
-
+    
     %if there are possible links ...
     if any(isfinite(nonzeros(costMat)))
 
@@ -711,12 +735,6 @@ if any(trackStartTime > 1) && any(trackEndTime < numFramesEff)
                     
                 end
                 
-                %                 tracksCoordAmpCG(tracksCoordAmpCG==0) = NaN;
-                %                 if probDim == 2
-                %                     tracksCoordAmpCG(:,3:8:end) = 0;
-                %                     tracksCoordAmpCG(:,7:8:end) = 0;
-                %                 end
-                
             end
 
             %perform all gap closing links and modify connectivity accordingly
@@ -843,6 +861,41 @@ for iTrack = 1 : length(tracksFinal)
     tracksFinal(iTrack).seqOfEvents(:,1) = tracksFinal(iTrack).seqOfEvents(:,1) + emptyStart;
 end
 
+%replicate if only subset of movieInfo is used (e.g. by,
+%movieInfo=movieInfo(1:repFrame:end);) - added by Sangyoon Han 2/25/2016
+if repFrame>1
+    for iTrack = 1 : length(tracksFinal)
+        containsFinal=false;
+        tracksFinal(iTrack).seqOfEvents(1,1) = (tracksFinal(iTrack).seqOfEvents(1,1)-1)*repFrame+1;
+        if  tracksFinal(iTrack).seqOfEvents(2,1)==numFramesEff
+            containsFinal=true;
+            leftOverFrames = (tracksFinal(iTrack).seqOfEvents(2,1))*repFrame-numFrames;
+            tracksFinal(iTrack).seqOfEvents(2,1) = min((tracksFinal(iTrack).seqOfEvents(2,1))*repFrame,numFrames);
+        else
+            leftOverFrames=0;
+            tracksFinal(iTrack).seqOfEvents(2,1) = (tracksFinal(iTrack).seqOfEvents(2,1))*repFrame;
+        end
+        curTracksFeatIndxCG = kron(tracksFinal(iTrack).tracksFeatIndxCG,ones(1,repFrame));
+        if leftOverFrames>1
+            curTracksFeatIndxCG(end-leftOverFrames+1:end)=[];
+        end
+        tracksFinal(iTrack).tracksFeatIndxCG = curTracksFeatIndxCG;
+
+        tempCoordAmpCG = zeros(1,(tracksFinal(iTrack).seqOfEvents(2,1)-tracksFinal(iTrack).seqOfEvents(1,1)+1)*8);
+        for pp=1:length( tracksFinal(iTrack).tracksCoordAmpCG)/8
+            curSourceSegment = ((pp-1)*8+1):pp*8;
+            curOutputSegment = ((pp-1)*repFrame*8+1):pp*repFrame*8;
+            %finalFrame=tracksFinal(iTrack).seqOfEvents(2,1)*8;
+            curTracksCoordAmpCG = repmat( tracksFinal(iTrack).tracksCoordAmpCG(curSourceSegment),1,repFrame);
+            if containsFinal && pp==length( tracksFinal(iTrack).tracksCoordAmpCG)/8
+                curOutputSegment = ((pp-1)*repFrame*8+1):(pp*repFrame*8-leftOverFrames*8);
+                curTracksCoordAmpCG = repmat( tracksFinal(iTrack).tracksCoordAmpCG(curSourceSegment),1,repFrame-leftOverFrames);
+            end
+            tempCoordAmpCG(curOutputSegment)=curTracksCoordAmpCG;
+        end
+        tracksFinal(iTrack).tracksCoordAmpCG=tempCoordAmpCG;
+    end
+end
 %% Save results
 
 if isstruct(saveResults)

@@ -69,6 +69,25 @@ function [kalmanFilterInfoOut,errFlag] = kalmanGainLinearMotion(trackedFeatureIn
 %       errFlag            : 0 if function executes normally, 1 otherwise.
 %
 %Khuloud Jaqaman, March 2007
+%
+% Copyright (C) 2018, Danuser Lab - UTSouthwestern 
+%
+% This file is part of u-track.
+% 
+% u-track is free software: you can redistribute it and/or modify
+% it under the terms of the GNU General Public License as published by
+% the Free Software Foundation, either version 3 of the License, or
+% (at your option) any later version.
+% 
+% u-track is distributed in the hope that it will be useful,
+% but WITHOUT ANY WARRANTY; without even the implied warranty of
+% MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+% GNU General Public License for more details.
+% 
+% You should have received a copy of the GNU General Public License
+% along with u-track.  If not, see <http://www.gnu.org/licenses/>.
+% 
+% 
 
 %% Output
 
@@ -91,6 +110,12 @@ else
 end
 
 %% Gain calculation and update
+
+%take absolute value of all noise variances - this takes care of the
+%negative variances used to indicate first appearances
+for iFrame = 1 : length(kalmanFilterInfoIn)
+    kalmanFilterInfoIn(iFrame).noiseVar = abs(kalmanFilterInfoIn(iFrame).noiseVar);
+end
 
 %copy kalmanFilterInfoIn into kalmanFilterInfoOut
 kalmanFilterInfoOut = kalmanFilterInfoIn;
@@ -123,7 +148,7 @@ for iFeature = 1 : numFeatures
         %calculate Kalman gain
         kalmanGain = stateCovOld*observationMat' / ...
             (observationMat*stateCovOld*observationMat'+...
-            diag(frameInfo.allCoord(iFeature,2:2:end).^2));
+            diag(eps+frameInfo.allCoord(iFeature,2:2:end).^2)); %add epsilon to avoid division by zero in the extreme case of all errors = zero
         
         % kalmanGain = stateCovOld*observationMat'*...
         %  inv(observationMat*stateCovOld*observationMat'+...
@@ -186,6 +211,11 @@ for iFeature = 1 : numFeatures
 
     end %(if iFeaturePrev ~= 0 ... else ...)
 
+    %under all circumstances, fill in the real position of each particle
+    tmpState = kalmanFilterInfoOut(iFrame).stateVec(iFeature,:);
+    tmpState(1:probDim) = frameInfo.allCoord(iFeature,1:2:end);
+    kalmanFilterInfoOut(iFrame).stateVec(iFeature,:) = tmpState;
+    
 end %(for iFeature = 1 : numFeatures)
 
 

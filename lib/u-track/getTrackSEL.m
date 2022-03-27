@@ -12,8 +12,12 @@ function trackSEL = getTrackSEL(trackedFeatureInfo,segmentSEL)
 %                           consists of 
 %                           [x1 y1 z1 a1 dx1 dy1 dz1 da1 x2 y2 z2 a2 dx2 dy2 dz2 da2 ...]
 %                           in image coordinate system (coordinates in
-%                           pixels). NaN is used to indicate time points 
-%                           where the track does not exist.
+%                           pixels). 
+%                           If matrix is full, NaN is used to indicate time 
+%                           points where the track does not exist.
+%                           If matrix is sparse, NaN indicates gaps but
+%                           times before and after a track are indicated by
+%                           0 (they are basically unfilled elements).
 %                           -- OR -- 
 %                           Output of trackCloseGapsKalman:
 %                           Structure array with number of entries equal to
@@ -65,6 +69,25 @@ function trackSEL = getTrackSEL(trackedFeatureInfo,segmentSEL)
 %their branches.
 %
 %Khuloud Jaqaman, August 2006
+%
+% Copyright (C) 2018, Danuser Lab - UTSouthwestern 
+%
+% This file is part of u-track.
+% 
+% u-track is free software: you can redistribute it and/or modify
+% it under the terms of the GNU General Public License as published by
+% the Free Software Foundation, either version 3 of the License, or
+% (at your option) any later version.
+% 
+% u-track is distributed in the hope that it will be useful,
+% but WITHOUT ANY WARRANTY; without even the implied warranty of
+% MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+% GNU General Public License for more details.
+% 
+% You should have received a copy of the GNU General Public License
+% along with u-track.  If not, see <http://www.gnu.org/licenses/>.
+% 
+% 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Output
@@ -157,45 +180,62 @@ if isstruct(trackedFeatureInfo)
         
     else
         
-        %find track start times
-        for i=1:numTracks
-            trackSEL(i,1) = trackedFeatureInfo(i).seqOfEvents(1,1);
-        end
+        
+        % vertically concatenate the r x 4 seqOfEvents
+        seqOfEventsMatrix = vertcat(trackedFeatureInfo.seqOfEvents);
         
         %find track end times
-        for i=1:numTracks
-            trackSEL(i,2) = trackedFeatureInfo(i).seqOfEvents(end,1);
-        end
+        % find the indices of the last row of each compound track
+        seqEndIdx = cumsum(cellfun('size',{trackedFeatureInfo.seqOfEvents},1));
+        
+        %find track start times
+        % the first row comes after each last row except the last
+        seqBegIdx = [1 seqEndIdx(1:end-1)+1];
+        trackSEL(:,1:2) = [seqOfEventsMatrix(seqBegIdx,1) ...
+                           seqOfEventsMatrix(seqEndIdx,1)];
         
     end
-
+    
 else %if input is a matrix
-
+    
     %make new matrix which contains only one column per time point
     trackedFeatureInfo = trackedFeatureInfo(:,1:8:end);
     
-    %if matrix is in sparse format, convert to full and replace zeros with
-    %NaNs
+    %if matrix is in sparse format
     if issparse(trackedFeatureInfo)
-        trackedFeatureInfo = full(trackedFeatureInfo);
-        trackedFeatureInfo(trackedFeatureInfo==0) = NaN;
+        
+        %find non-empty tracks
+        indxGood = find((max(abs(trackedFeatureInfo),[],2))~=0);
+        
+        %find track start times
+        for i = indxGood'
+            trackSEL(i,1) = find(trackedFeatureInfo(i,:)~=0,1,'first');
+        end
+        
+        %find track end times
+        for i = indxGood'
+            trackSEL(i,2) = find(trackedFeatureInfo(i,:)~=0,1,'last');
+        end
+        
+    else %if in full format
+        
+        %find non-empty tracks
+        indxGood = find(~isnan(max(trackedFeatureInfo,[],2)));
+        
+        %find track start times
+        for i = indxGood'
+            trackSEL(i,1) = find(~isnan(trackedFeatureInfo(i,:)),1,'first');
+        end
+        
+        %find track end times
+        for i = indxGood'
+            trackSEL(i,2) = find(~isnan(trackedFeatureInfo(i,:)),1,'last');
+        end
+        
     end
     
-    %find non-empty tracks
-    indxGood = find(~isnan(max(trackedFeatureInfo,[],2)));
-
-    %find track start times
-    for i = indxGood'
-        trackSEL(i,1) = find(~isnan(trackedFeatureInfo(i,:)),1,'first');
-    end
-
-    %find track end times
-    for i = indxGood'
-        trackSEL(i,2) = find(~isnan(trackedFeatureInfo(i,:)),1,'last');
-    end
-
 end %(if isstruct(trackedFeatureInfo))
-    
+
 %calculate track lifetimes
 trackSEL(:,3) = trackSEL(:,2) - trackSEL(:,1) + 1;
 

@@ -45,13 +45,16 @@ classdef Metadata<handle
         
         function create(obj, mmc)
             metadata = mmc.getLoadedDevices();
+            mmc.waitForSystem;
             obj.data = cell(1,3);
             for i=1:metadata.size()
                 device = char(metadata.get(i-1));
                 deviceProp = mmc.getDevicePropertyNames(device);
+                mmc.waitForSystem;
                 for j = 1:deviceProp.size()
                     prop = char(deviceProp.get(j-1));
                     propVal = char(mmc.getProperty(device, prop));
+                    mmc.waitForSystem;
                     obj.data{1} = [obj.data{1}; {device}];
                     obj.data{2} = [obj.data{2}; {prop}];
                     obj.data{3} = [obj.data{3}; {propVal}];
@@ -62,8 +65,8 @@ classdef Metadata<handle
                 sprintf('%f', mmc.getXPosition('XYStage')));
             obj.add('XYStage', 'YPosition_um', ...
                 sprintf('%f', mmc.getYPosition('XYStage')));
-            obj.add('ZStage', 'ZPosition_um', ...
-                sprintf('%f', mmc.getPosition('ZStage')));
+            obj.add('TIZDrive', 'ZPosition_um', ...
+                sprintf('%f', mmc.getPosition('TIZDrive')));
             obj.add('Camera', 'CurrentPixelSize_um', ...
                 sprintf('%f', mmc.getPixelSizeUm()));
             obj.add('Camera', 'ImageWidth', ...
@@ -100,19 +103,12 @@ classdef Metadata<handle
             if size(key_idx) > 1
                 error(['more than one key with name ''' key '''.']);
             end
-            if isa(val, 'numeric')
-                val = num2str(val);
-            end
             obj.data{3}(key_idx) = {val};
         end
         
         function append(obj, category, key, val)
             obj.add(category, key, val);
             obj.write();
-        end
-        
-        function rename(obj, new_name)
-            obj.file = new_name;
         end
         
         % Getters
@@ -122,7 +118,11 @@ classdef Metadata<handle
         end
         
         function shutter = getShutter(obj)
-            shutter = obj.getVal('Core','Shutter');
+            shutter = obj.getVal('Arduino-Switch','State');
+        end
+        
+        function exposure = getExposure(obj)
+            exposure = str2double(obj.getVal(obj.getCameraName(),'Exposure'));
         end
         
         function camera_name = getCameraName(obj)
@@ -169,10 +169,10 @@ classdef Metadata<handle
             camera_pixel_type_str = obj.getVal(obj.getCameraName(), 'PixelType');
         end
         
-        function bin = getBinning(obj)
-            bin_str = obj.getVal(obj.getCameraName(), 'Binning');
-            bin = str2double(bin_str{1}(1));
-        end
+%         function bin = getBinning(obj)
+%             bin_str = obj.getVal(obj.getCameraName(), 'Binning');
+%             bin = str2double(bin_str{1}(1));
+%         end
         
         function pix_type = getPixelType(obj)
             pix_type = obj.pixel_type;
@@ -192,6 +192,9 @@ classdef Metadata<handle
         
         function n_before = getNImagesBeforeFreeze(obj)
             n_before = str2double(obj.getVal('SequenceAcquisition', 'NImagesBeforeFreeze'));
+            if isempty(n_before)
+                n_before = str2double(obj.getVal('SequenceAcquisition', 'NumberImages'));
+            end
         end
         
         function xcorrection = getXCorrection(obj)
@@ -211,7 +214,7 @@ classdef Metadata<handle
         end
         
         function zpos = getZPos(obj)
-            zpos = str2double(obj.getVal('ZStage', 'ZPosition_um'));
+            zpos = str2double(obj.getVal('TIZDrive', 'ZPosition_um'));
         end
         
         function datetime = getDateStr(obj)
@@ -227,7 +230,7 @@ classdef Metadata<handle
             starttime = [];
             d = obj.getVal('Sample', 'IncubationStart');
             if ~isempty(d)
-                starttime = datevec(d, 'dd-mmm-yyyy HH:MM');
+                starttime = datevec(d, 'dd-mmm-yyyy HH:MM:SS');
             end
         end
         
@@ -265,21 +268,17 @@ classdef Metadata<handle
             is_y_mirrored = str2double(obj.getVal(obj.getCameraName(), 'TransposeMirrorY'));
         end
         
-        function is_xy_mirrored = isMirroredxY(obj)
-            is_y_mirrored = str2double(obj.getVal(obj.getCameraName(), 'TransposeMirrorXY'));
-        end
-
         function reversed = isReversed(obj)
             reversed = str2double(obj.getVal('Sample','Reversed'));
         end
         
         function fluorescent = isFluorescent(obj)
-            if strcmp(obj.getShutter(), 'Spectra')
+            if strcmp(obj.getShutter(), '2')
                 fluorescent = 1;
-            elseif strcmp(obj.getShutter(), 'Arduino-Shutter')
+            elseif strcmp(obj.getShutter(), '1')
                 fluorescent = 0;
             else
-                error('Don''t recognize that shutter.');
+                error('Don''t recognize shutter state.');
             end
         end
         
@@ -294,6 +293,22 @@ classdef Metadata<handle
         
         function appendImageWidthPixel(obj, width)
             obj.append('Camera', obj.image_width_key, num2str(width, '%d'));
+        end
+        
+        function resolution = getResolution(obj)
+            objective = obj.getVal('TINosePiece','Label');
+            objective = objective{1};
+            resolution = 0;
+            switch objective
+                case '1-Plan Fluor 4x NA 0.13 Dry'
+                    resolution = 2.12/2; %um
+                case '2-Plan Fluor 10x NA 0.30 Dry'
+                    resolution = 0.92/2; %um
+                case '3-Plan Fluor 40x NA 0.75 Dry'
+                    resolution = 0.37/2; %um
+                case '5-Plan Fluor 100x NA 1.30 Oil'
+                    resolution = 0.21/2; %um
+            end
         end
     end
 end

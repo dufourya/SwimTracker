@@ -1,0 +1,102 @@
+#!/usr/bin/env python
+
+import os
+import subprocess
+import glob
+#import socket
+import re
+import getpass
+
+user_name = getpass.getuser()
+#print user_name
+#hostname = socket.gethostname()
+workdir = os.path.abspath('.')
+#print workdir
+#out_dir = os.path.join(workdir, 'outputs')
+code_base = '/mnt/research/dufourlab/GitLab/SwimTracker/'
+#code_base = '/Users/yanndufour/Documents/Microscope/'
+out_dir = os.path.join(workdir, 'hpc_log_files/')
+git_dir = os.path.join(code_base, '.git/')
+#print code_base
+#print git_dir
+git_prefix = ("git --git-dir={0} --work-tree={1} ").format(git_dir,code_base)
+check_staged = 'diff-index --quiet --cached HEAD'
+check_unstaged = 'diff --quiet'
+has_changes = False
+
+try:
+    subprocess.check_call(git_prefix + check_staged,shell=True)
+except subprocess.CalledProcessError:
+    print('You have staged changes in your repository.')
+    has_changes = True
+try:
+    subprocess.check_call(git_prefix + check_unstaged,shell=True)
+except subprocess.CalledProcessError:
+    print('You have unstaged changes in your repository.')
+    has_changes = True
+if has_changes:
+    print('Please commit or revert them to continue.')
+    exit(1)
+else:
+    get_hash = 'rev-parse --verify HEAD'
+    args =  (git_prefix + get_hash)
+    #print args
+    #repo_hash = subprocess.Popen(['ls','-l'],stdout=subprocess.PIPE).communicate()[0]
+    #print repo_hash
+    repo_hash = subprocess.Popen(args,shell=True,stdout=subprocess.PIPE).communicate()[0].rstrip()
+    #print repo_hash
+
+movies_meta = glob.glob('*.meta')
+movies_meta = [m.replace('.meta','') for m in movies_meta]
+movies_bin = glob.glob('*.bin')
+movies_bin = [m.replace('.bin','') for m in movies_bin]
+movies_detection = glob.glob('*.rad_detection.mat')
+movies_detection = [m.replace('.rad_detection.mat','') for m in movies_detection]
+movies_tracking = glob.glob('*.rad_tracking.mat')
+movies_tracking = [m.replace('.rad_tracking.mat','') for m in movies_tracking]
+movies_swimtracker = glob.glob('*.rad_swimtracker.mat')
+movies_swimtracker = [m.replace('.rad_swimtracker.mat','') for m in movies_swimtracker]
+
+movies = list(set(movies_meta) & (set(movies_bin) | set(movies_detection) | set(movies_tracking) | set(movies_swimtracker)))
+
+tables = glob.glob('*.table.txt')
+tables = [t.replace('.table.txt','') for t in tables]
+
+pictures = glob.glob('*.pictures.mat')
+pictures = [p.replace('.mat','') for p in pictures]
+
+movies = list(set(movies)-set(tables))
+movies = list(set(movies)-set(pictures))
+
+if len(movies)>0:
+    if not os.path.exists(out_dir):
+        os.mkdir(out_dir)
+    script_file = open(out_dir + 'submit_jobs.sh','w')
+    script_file.write('#!/bin/bash\n') 
+    script_file.write('#Git Microscope hash:' + repo_hash.decode("utf-8")+'\n')
+    for movie in movies:
+        sbatch_file_name = movie + '.sb'
+        lines = []
+        lines.append('#!/bin/bash --login')
+        lines.append('#SBATCH --job-name=' + movie)
+        lines.append('#SBATCH --mail-user=' + user_name + '@msu.edu')
+        lines.append('#SBATCH --mail-type=FAIL')
+        lines.append('#SBATCH --ntasks=1')
+        lines.append('#SBATCH --cpus-per-task=1')
+        lines.append('#SBATCH --tasks-per-node=1')
+        lines.append('#SBATCH --time=03:59:00')
+        lines.append('#SBATCH --mem=32G')
+        lines.append('#SBATCH --output='+ out_dir + movie + '_out')
+        lines.append('#SBATCH --error='+ out_dir + movie + '_error')
+        lines.append('cd $SLURM_SUBMIT_DIR')
+        lines.append('module load MATLAB-Compiler/2018a')
+        lines.append(code_base + 'runTrackSingle ' + workdir + '/' + movie)
+        qsub = "\n".join(lines)
+        qsub_file = open(out_dir + sbatch_file_name, 'w')
+        qsub_file.write(qsub)
+        qsub_file.close()
+        script_file.write('sbatch ' + out_dir + sbatch_file_name+'\n')
+    script_file.close()
+    subprocess.call('sh '+ out_dir + 'submit_jobs.sh', shell=True)
+else:
+    print('No movie to process in this folder.')
